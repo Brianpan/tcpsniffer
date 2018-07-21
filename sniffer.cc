@@ -24,6 +24,10 @@
 
 #include <google/protobuf/message_lite.h>
 #include <google/protobuf/util/delimited_message_util.h>
+#include <google/protobuf/descriptor.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <google/protobuf/io/coded_stream.h>
+#include <google/protobuf/io/zero_copy_stream_impl_lite.h>
 #include "packet.pb.h"
 
 #define TCP_PROTOCOL 6
@@ -32,8 +36,10 @@
 #define MYSQL_PACKET_OFFSET 4
 #define MYSQL_OPCODE_OFFSET 1
 #define FLUSH_FREQ 10
+#define HOST_SOCKET_PORT 1234
 
 using namespace std;
+using namespace google::protobuf::io;
 
 struct sockaddr_in src, dest;
 mutex mtx;
@@ -47,6 +53,38 @@ int rawSocket() {
 	}
 
 	printf("create socket success !, %d\n", sock);
+	return sock;
+}
+
+int streamSocket() {
+	int sock;
+	int sock_setting = 1;
+	struct sockaddr_in haddr;
+	char *hostname = "127.0.0.1";
+
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if(sock < 0) {
+		printf("create socket error !\n");
+		exit(1);
+	}
+	// set socket opts
+	if( setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*) &sock_setting, sizeof(int)) == -1 ||
+		setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (char*) &sock_setting, sizeof(int)) == -1 ) {
+		printf("set socketopts error !\n");
+		exit(1);
+	}
+
+	haddr.sin_family = AF_INET;
+	haddr.sin_port = htons(HOST_SOCKET_PORT);
+	memset(&(haddr.sin_zero), 0, 8);
+	haddr.sin_addr.s_addr = inet_addr(hostname);
+
+	if( connect( sock, (struct sockaddr*)&haddr, sizeof(haddr)) == -1 ){
+		printf("connect socket error %d\n", errno);
+		exit(1);
+	}
+
+	printf("create stream socket success !, %d\n", sock);
 	return sock;
 }
 
@@ -108,7 +146,7 @@ int main(int argc, char **argv) {
 		exit(1);
 	}
 
-	int sock;
+	int sock, ssock;
 	// eth layer
 	struct sockaddr saddr;
 	int saddr_len = sizeof(saddr);
@@ -119,6 +157,9 @@ int main(int argc, char **argv) {
 
 	sock = rawSocket();
 	setPromisc(argv[1], &sock);
+
+	ssock = streamSocket();
+	int bytecount;
 
 	// Network layers' header
 	struct iphdr *iph;
@@ -198,23 +239,6 @@ int main(int argc, char **argv) {
 
 			printPkt(pkt);
 
-
-			string src_ip  = "192.168.67.3";
-			string dest_ip = "192.168.67.4";
-			// uint32_t uint type
-			uint32_t src_port  = 3306;
-			uint32_t dest_port = 10026;
-			uint32_t seq       = 102647;
-			uint32_t ack_seq   = 22026;
-
-
-			// prepare google buf protocol
-			pkt.set_src_ip(src_ip);
-			pkt.set_dest_ip(dest_ip);
-			pkt.set_src_port(src_port);
-			pkt.set_dest_port(dest_port);
-			pkt.set_seq(seq);
-			pkt.set_ack_seq(ack_seq);
 			// write to log
 			mtx.lock();
 			if( !google::protobuf::util::SerializeDelimitedToOstream(pkt, &fs) ) {
@@ -223,12 +247,29 @@ int main(int argc, char **argv) {
 				printf("log packet went wrong !\n");
 				exit(1);
 			}
+			// write to parse socket
+			int siz = pkt.ByteSize()+4;
+			char buf[siz];
+			printf("payload_size: %d\n", pkt.ByteSize());
+
+			// create output stream
+			google::protobuf::io::ArrayOutputStream aos(buf,siz);
+			CodedOutputStream *coded_output = new CodedOutputStream(&aos);
+			// wirte pkt size at first
+			coded_output->WriteVarint32(pkt.ByteSize());
+			// write pkt to coded_output
+			pkt.SerializeToCodedStream(coded_output);
+
+			if( (bytecount=send(ssock, (void *) buf,siz, 0))== -1 ) {
+				printf("sending data error %d\n", errno);
+			}
 			mtx.unlock();
 		}
 	}
 
 	fs.close();
 	close(sock);
+	close(ssock);
 	google::protobuf::ShutdownProtobufLibrary();
 	free(buf);
 	return 0;
