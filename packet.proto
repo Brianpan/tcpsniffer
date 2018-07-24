@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package packet;
+
+message PackPacket {
+  string timestamp = 1;
+  uint64 timestamp_int = 2;
+  string src_ip = 3;
+  string dest_ip = 4;
+  uint32 src_port = 5;
+  uint32 dest_port = 6;
+  uint32 seq = 7;
+  uint32 ack_seq = 8;
+  uint32 payload_size = 9;
+  bool   is_query = 10;
+  bytes  payload = 11;
+}
+

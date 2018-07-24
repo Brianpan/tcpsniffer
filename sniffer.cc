@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <time.h>
+#include <sys/time.h>
 #include <fstream>
 
 #include <pthread.h>
@@ -37,6 +38,7 @@
 #define MYSQL_OPCODE_OFFSET 1
 #define FLUSH_FREQ 10
 #define HOST_SOCKET_PORT 1234
+#define MAX_BUFFER_SIZE 12288
 
 using namespace std;
 using namespace google::protobuf::io;
@@ -60,7 +62,7 @@ int streamSocket() {
 	int sock;
 	int sock_setting = 1;
 	struct sockaddr_in haddr;
-	char *hostname = "127.0.0.1";
+	string hostname = "127.0.0.1";
 
 	sock = socket(AF_INET, SOCK_STREAM, 0);
 	if(sock < 0) {
@@ -77,7 +79,7 @@ int streamSocket() {
 	haddr.sin_family = AF_INET;
 	haddr.sin_port = htons(HOST_SOCKET_PORT);
 	memset(&(haddr.sin_zero), 0, 8);
-	haddr.sin_addr.s_addr = inet_addr(hostname);
+	haddr.sin_addr.s_addr = inet_addr(hostname.c_str());
 
 	if( connect( sock, (struct sockaddr*)&haddr, sizeof(haddr)) == -1 ){
 		printf("connect socket error %d\n", errno);
@@ -88,6 +90,7 @@ int streamSocket() {
 	return sock;
 }
 
+// network interface to promisc mode
 void setPromisc(char *iface, int *sock) {
 	// to configure network interface
 	struct ifreq ifr;
@@ -151,15 +154,15 @@ int main(int argc, char **argv) {
 	struct sockaddr saddr;
 	int saddr_len = sizeof(saddr);
 
-	int buf_size = 16382;
-	unsigned char *buf = (unsigned char *) malloc(buf_size);
-	memset(buf, 0, buf_size);
+	unsigned char buf[MAX_BUFFER_SIZE];
+	memset(buf, 0, MAX_BUFFER_SIZE);
 
 	sock = rawSocket();
 	setPromisc(argv[1], &sock);
 
 	ssock = streamSocket();
 	int bytecount;
+	int recv_bytes;
 
 	// Network layers' header
 	struct iphdr *iph;
@@ -170,11 +173,11 @@ int main(int argc, char **argv) {
 	unsigned short tcp_header_size;
 	
 	// time utils
-	time_t timer;
-	struct tm *ptm;
 	char time_buf[32];
 	memset(time_buf, 0, 32);
-	
+	char curtime[36];
+	memset(curtime, 0, 36);
+
 	string LOG_FILE = "packet.log";
 	fstream fs(LOG_FILE, ios::out);
 
@@ -185,7 +188,7 @@ int main(int argc, char **argv) {
 
 	// loop for fetching packets
 	while(1) {
-		int recv_bytes = recvfrom(sock, buf, buf_size, 0, &saddr, (socklen_t*) &saddr_len);
+		recv_bytes = recvfrom(sock, buf, MAX_BUFFER_SIZE, 0, &saddr, (socklen_t*) &saddr_len);
 		if(recv_bytes > 0) {
 			// start getting info from IP layer
 			iph = (struct iphdr *)(buf + sizeof(struct ethhdr));
@@ -212,14 +215,18 @@ int main(int argc, char **argv) {
 			dest.sin_addr.s_addr = iph->daddr;
 
 			// setup protobuf object
-			time(&timer);
-			ptm = gmtime(&timer);
-			strftime(time_buf, 32, "%m/%d/%Y %H:%M:%S", ptm);
+			timeval curTime;
+			gettimeofday(&curTime, NULL);
+			int milli = curTime.tv_usec / 1000;
+			strftime(time_buf, 32, "%Y-%m-%dT%H:%M:%S", localtime(&curTime.tv_sec));
+			sprintf(curtime, "%s.%dZ", time_buf, milli);
+			long int timestamp_int = curTime.tv_sec*1000 + milli;
 
 			// pack
 			packet::PackPacket pkt;
 
-			pkt.set_timestamp( string(time_buf) );
+			pkt.set_timestamp( string(curtime) );
+			pkt.set_timestamp_int(timestamp_int);
 			pkt.set_src_ip( inet_ntoa(src.sin_addr) );
 			pkt.set_dest_ip( inet_ntoa(dest.sin_addr) );
 			pkt.set_src_port( ntohs(tcph->source) );
@@ -228,12 +235,15 @@ int main(int argc, char **argv) {
 			// add payload size to match 0ack seq
 			pkt.set_seq( ntohl(tcph->seq) + (recv_bytes - tcp_header_size) );
 			pkt.set_ack_seq( ntohl(tcph->ack_seq) );
-			
+
 			// check 
-			if( checkMySQLQueryPayload(buf+tcp_header_size, recv_bytes - tcp_header_size) )
+			if( checkMySQLQueryPayload(buf+tcp_header_size, recv_bytes - tcp_header_size) ) {
 				pkt.set_payload( buf+tcp_header_size, recv_bytes - tcp_header_size );
+				pkt.set_is_query(true);
+			}
 			else
 				pkt.set_payload( "resp" );
+				// pkt.set_payload(buf+tcp_header_size, recv_bytes - tcp_header_size);
 
 			pkt.set_payload_size( pkt.payload().length() );
 
@@ -243,26 +253,25 @@ int main(int argc, char **argv) {
 			mtx.lock();
 			if( !google::protobuf::util::SerializeDelimitedToOstream(pkt, &fs) ) {
 				google::protobuf::ShutdownProtobufLibrary();
-				free(buf);
 				printf("log packet went wrong !\n");
 				exit(1);
 			}
 			// write to parse socket
 			int siz = pkt.ByteSize()+4;
-			char buf[siz];
+			char output_buf[siz];
 			printf("payload_size: %d\n", pkt.ByteSize());
 
 			// create output stream
-			google::protobuf::io::ArrayOutputStream aos(buf,siz);
+			google::protobuf::io::ArrayOutputStream aos(output_buf,siz);
 			CodedOutputStream *coded_output = new CodedOutputStream(&aos);
 			// wirte pkt size at first
 			coded_output->WriteVarint32(pkt.ByteSize());
 			// write pkt to coded_output
 			pkt.SerializeToCodedStream(coded_output);
 
-			if( (bytecount=send(ssock, (void *) buf,siz, 0))== -1 ) {
+			if( (bytecount=send(ssock, (void *) output_buf, siz, 0))== -1 )
 				printf("sending data error %d\n", errno);
-			}
+
 			mtx.unlock();
 		}
 	}
@@ -271,6 +280,5 @@ int main(int argc, char **argv) {
 	close(sock);
 	close(ssock);
 	google::protobuf::ShutdownProtobufLibrary();
-	free(buf);
 	return 0;
 }
