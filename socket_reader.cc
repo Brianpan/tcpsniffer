@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <syslog.h>
 
 // thread utils
 #include <mutex>
@@ -68,8 +69,10 @@ class QueryWorker {
 				google::protobuf::uint32 payload_size;
 
 				// recv whole packet otherwise blocking
-				if((byte_count = recv(csock, (void *)packet_buffer, buffer_size, MSG_WAITALL))== -1)
+				if((byte_count = recv(csock, (void *)packet_buffer, buffer_size, MSG_WAITALL))== -1) {
 					printf("recv data error ! %d\n", errno);
+					syslog(LOG_ERR, "recv data error ! %d", errno);
+				}
 				else {
 					google::protobuf::io::ArrayInputStream ais(packet_buffer, buffer_size);
 					CodedInputStream coded_input(&ais);
@@ -85,10 +88,9 @@ class QueryWorker {
 					coded_input.PopLimit(msgLimit);
 
 					// process info
-					if( pkt.is_query() ) {
+					if( pkt.is_query() )
 						// Print the message
 						insertMap(pkt);
-					}
 					else
 						queryMap(pkt);
 					break;
@@ -124,6 +126,7 @@ void *socketHandler(void *args) {
 		// MSG_PEEK means the data is treated as unread and next recv shall recv this data
 		if( (byte_count = recv(csock, byte_buffer, PROTOCOL_PAYLOAD_SIZE_SIZE, MSG_PEEK)) == -1 ) {
 			printf("recv data error !\n");
+			syslog(LOG_ERR, "recv data error !");
 			exit(1);
 		}
 
@@ -144,12 +147,14 @@ int streamSocket() {
 	sock = socket(AF_INET, SOCK_STREAM, 0);
 	if(sock < 0) {
 		printf("create socket error !\n");
+		syslog(LOG_ERR, "create socket error !");
 		exit(1);
 	}
 	// set socket opts
 	if( setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*) &sock_setting, sizeof(int)) == -1 ||
 		setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (char*) &sock_setting, sizeof(int)) == -1 ) {
 		printf("set socketopts error !\n");
+		syslog(LOG_ERR, "set socketopts error !");
 		exit(1);
 	}
 
@@ -160,20 +165,25 @@ int streamSocket() {
 
 	if(bind(sock, (sockaddr*) &haddr, sizeof(haddr)) == -1) {
 		printf("bind to socket error !\n");
+		syslog(LOG_ERR, "bind to socket error !");
 		exit(1);
 	}
 	
 	if(listen(sock, 10) == -1) {
 		printf("listen to socket error !\n");
+		syslog(LOG_ERR, "listen to socket error !");
 		exit(1);
 	}
 
 	printf("create socket success !, %d\n", sock);
+	syslog(LOG_INFO, "create socket success !, %d", sock);
+
 	return sock;
 }
 
 // simple google protocol buffer writer
 int main(int argc, char **argv) {
+	openlog ("socket_reader", LOG_PID, LOG_DAEMON | LOG_LOCAL2);
 	// create socket
 	int hsock = streamSocket();
 	socklen_t addr_size = sizeof(sockaddr_in);;
@@ -181,15 +191,19 @@ int main(int argc, char **argv) {
 	int *csock = (int*) malloc(sizeof(int));
 
 	printf("start parsing \n");
-	
+	syslog(LOG_INFO, "start parsing");
+
 	while(true) {
 		if((*csock = accept( hsock, (sockaddr*)&sadr, &addr_size)) == -1) continue;
-		printf("---------------------\nReceived connection from %s\n",inet_ntoa(sadr.sin_addr));
+		printf("---------------------\nReceived connection from %s\n", inet_ntoa(sadr.sin_addr));
+		syslog(LOG_INFO, "Received connection from %s", inet_ntoa(sadr.sin_addr));
+
 		pthread_t handler_thread;
 		int handler_pid = pthread_create(&handler_thread, NULL, &socketHandler, (void*) csock);
 		pthread_detach(handler_pid);
 	}
 
 	free(csock);
+	closelog();
 	return 0;
 }
