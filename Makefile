@@ -3,8 +3,8 @@ CFLAGS = -Wall -std=c++11 -pthread -I/usr/local/include -L/usr/local/lib -lproto
 all: sniffer
 
 sniffer: sniffer.cc packet.pb.cc
-	$(CC) sniffer.cc packet.pb.cc $(CFLAGS)  -o $@
+	$(CC) $^ $(CFLAGS)  -o $@
 reader: socket_reader.cc pocket.pb.cc
-	$(CC) socket_reader.cc pocket.pb.cc $(CFLAGS) -O $@
+	$(CC) $^ $(CFLAGS) -O $@
 clean:
 	rm -rf sniffer
