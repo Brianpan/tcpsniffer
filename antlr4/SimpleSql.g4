@@ -43,12 +43,12 @@ deleteStmt
 //---------------------------
 columnStmt : ( ASTERISK | selectColumn (COMMA selectColumn)* ) ;
 fromStmt : FROM tableSources ;
-whereStmt : WHERE whereExpr ;
+whereStmt : WHERE subExpr ;
 limitStmt : LIMIT NUMBER ;
 offsetStmt : OFFSET NUMBER ;
 orderbyStmt : ORDER BY columnName (ASC | DESC);
 groupbyStmt : GROUP BY columnName ( havingStmt )?;
-havingStmt : HAVING expr ;
+havingStmt : HAVING subExpr ;
 
 
 tableSources : tableSource ( COMMA tableSource )* ;
@@ -74,7 +74,7 @@ joinPart
   ( ON expr )?
   ;
 
-selectColumn : ( columnName ( AS columnName )? ) | ( functionName LPAREN ( (whereExpr ( COMMA whereExpr )*) | ASTERISK )? RPAREN ) ;
+selectColumn : ( columnName ( AS columnName )? ) | ( functionName LPAREN ( (subExpr ( COMMA subExpr )*) | ASTERISK )? RPAREN ) ;
 
 insertStmtValue
   : selectStmt
@@ -87,22 +87,22 @@ exprWithDefaults
   : exprOrDefault ( COMMA exprOrDefault )* ;
 
 updatedElement
-  : columnName EQ ( expr | DEFAULT ) ;
+  : columnName EQ ( subExpr | DEFAULT ) ;
 
-whereExpr 
-  : whereExpr NOT? IN LPAREN ( ( inElement=whereExpr (COMMA inElements+=whereExpr)* )? | selectStmt ) RPAREN // IN clause
-  | whereExpr op=( ASTERISK |  DIVIDE | MOD | PLUS | MINUS ) whereExpr // calculation ops
-  | whereExpr op=( LT | LTE | GT | GTE ) whereExpr // comparison ops
-  | whereExpr op=( EQ | NOT_EQ | MATCH | NOT_MATCH ) whereExpr         // exprBinaryOp
-  | whereExpr NOT? LIKE whereExpr // like
-  | whereExpr NOT? REGEXP whereExpr // regexp
-  | NOT whereExpr
-  | whereExpr op=(AND | OR) whereExpr // AND/OR clause
-  | functionName LPAREN ( (whereExpr ( COMMA whereExpr )*) | ASTERISK )? RPAREN
-  | LPAREN whereExpr RPAREN
-  | whereExpr NOT? BETWEEN whereExpr AND whereExpr
-  | CASE whereExpr? ( WHEN whereExpr THEN whereExpr )+ ( ELSE whereExpr )? END // CASE WHEN clause
-  | literalValue 
+subExpr 
+  : subExpr NOT? IN LPAREN ( ( inElement=subExpr (COMMA inElements+=subExpr)* )? | selectStmt ) RPAREN // IN clause
+  | subExpr op=( ASTERISK |  DIVIDE | MOD | PLUS | MINUS ) subExpr // calculation ops
+  | subExpr op=( LT | LTE | GT | GTE ) subExpr // comparison ops
+  | subExpr op=( EQ | NOT_EQ | MATCH | NOT_MATCH ) subExpr         // exprBinaryOp
+  | subExpr NOT? LIKE subExpr // like
+  | subExpr NOT? REGEXP subExpr // regexp
+  | NOT subExpr
+  | subExpr op=(AND | OR) subExpr // AND/OR clause
+  | functionName LPAREN ( (subExpr ( COMMA subExpr )*) | ASTERISK )? RPAREN
+  | LPAREN subExpr RPAREN
+  | subExpr NOT? BETWEEN subExpr AND subExpr
+  | CASE subExpr? ( WHEN subExpr THEN subExpr )+ ( ELSE subExpr )? END // CASE WHEN clause
+  | subLiteralValue
   | fieldName
   ;
 
@@ -114,15 +114,15 @@ expr
  | expr op=( EQ | NOT_EQ | MATCH | NOT_MATCH ) expr         // exprBinaryOp
  | expr NOT? LIKE expr // like
  | expr NOT? REGEXP expr // regexp
- | expr EQ EQ expr                                          {notifyErrorListeners("operator == does not exist");} // exprError
+ // | expr EQ EQ expr                                          {notifyErrorListeners("operator == does not exist");} // exprError
  // NOT must negate any boolean operation, so it must have lower precedence than those
  | NOT expr                                                 // exprNot
  // in stmt 'where e1 and e2 and e3', booleans have lower precedence than the e1, e2, e3
  | expr op=( AND | OR ) expr                                // exprBinaryOp
- | functionName LPAREN ( (whereExpr ( COMMA whereExpr )*) | ASTERISK )? RPAREN     // exprFunction
+ | functionName LPAREN ( (subExpr ( COMMA subExpr )*) | ASTERISK )? RPAREN     // exprFunction
  | LPAREN expr RPAREN                                       // exprGroup
- | LPAREN expr RPAREN RPAREN                                {notifyErrorListeners("too many parentheses");}  // exprError
- | LPAREN expr                                              {notifyErrorListeners("missing closing ')'");}  // exprError
+ // | LPAREN expr RPAREN RPAREN                                {notifyErrorListeners("too many parentheses");}  // exprError
+ // | LPAREN expr                                              {notifyErrorListeners("missing closing ')'");}  // exprError
  | expr NOT? BETWEEN expr AND expr                          // exprBetween
  | CASE expr? ( WHEN expr THEN expr )+ ( ELSE expr )? END   // exprCase
  | literalValue                                             // exprLiteral
@@ -139,6 +139,16 @@ columnName : ID ;
 functionName : ID ;
 fieldName : ID | ( ( ID )? DOT ID );
 literalValue 
+  : NUMBER
+  | STRING
+  | SQUOTA_STRING
+  | DQUOTA_STRING
+  | TRUE
+  | FALSE
+  | NULL
+  ;
+
+subLiteralValue
   : NUMBER
   | STRING
   | SQUOTA_STRING

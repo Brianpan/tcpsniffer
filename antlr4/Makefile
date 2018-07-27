@@ -8,5 +8,8 @@ java: SimpleSql.g4
 cpp: SimpleSql.g4
 	${ANTLR4} -Dlanguage=Cpp $^
 
+go: SimpleSql.g4
+	${ANTLR4} -Dlanguage=Go $^
+
 clean:
-	rm -rf *.java *.class *.tokens *.interp *.cpp *.h
+	rm -rf *.java *.class *.tokens *.interp *.cpp *.h *.go

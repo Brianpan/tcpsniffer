@@ -1,0 +1,17 @@
+
+
+
+
+- ANTLR4
+TCP sniffer code snippet after generating golang runtime lib
+
+```
+// should include in every g4 generate
+func (ctx *SubLiteralValueContext) GetTextWithSpace() string {
+	return string("? ")
+}
+
+func (ctx *SubLiteralValueContext) GetOriginalText() string {
+	return ctx.BaseParserRuleContext.GetText()
+}
+```
