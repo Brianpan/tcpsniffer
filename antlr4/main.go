@@ -7,13 +7,17 @@ import (
 	"./packet"
 	"net"
 	"os"
+	"strings"
+	"sync"
 	"github.com/golang/protobuf/proto"
 	"github.com/antlr/antlr4/runtime/Go/antlr"
 )
 
 const hostSocketPort = ":1234"
 const protolPayloadSize = 4
+const logFile = "packet.log"
 
+var mux sync.Mutex
 //------ Socket implementations ------
 
 // CreateSockert : create socket factory
@@ -33,23 +37,25 @@ func checkError(err error) {
 	}
 }
 
-func socketHandler(conn net.Conn) {
+func socketHandler(conn net.Conn, fd *os.File) {
+	workerPtr := &QueryWorker{}
+	workerPtr.recordMapper = make(map[string]PacketInfo)
+
 	defer conn.Close()
 	for {
 		sizePayload := make([]byte, protolPayloadSize)
 		byteCount, err := conn.Read(sizePayload)
 		if byteCount == 0 {
-			break
+			continue
 		}
 
 		payloadSize := binary.LittleEndian.Uint32(sizePayload)
-		// payloadSize, _ := proto.DecodeVarint(sizePayload)
-		fmt.Println("Payload size :", payloadSize)
 		if err != nil {
 			break
 		}
-		workerPtr := &QueryWorker{}
-		workerPtr.execute(conn, payloadSize)
+
+		
+		workerPtr.execute(conn, payloadSize, fd)
 	}
 
 }
@@ -57,19 +63,20 @@ func socketHandler(conn net.Conn) {
 
 //------ Protobuf workers stuffs ------
 type PacketInfo struct {
-	timestamp string;
-	timestampInt uint64;
-	payload string;
+	timestamp string
+	timestampInt uint64
+	query string
+	params []string
 }
 
 type QueryWorker struct {
-	recorderMapper map[string]PacketInfo 
+	recordMapper map[string]PacketInfo 
 }
 
-func (*QueryWorker) execute(conn net.Conn, payloadSize uint32) {
+func (qw *QueryWorker) execute(conn net.Conn, payloadSize uint32, fd *os.File) {
 	payload := make([]byte, payloadSize)
 	for {
-		size, err := conn.Read(payload)
+		_, err := conn.Read(payload)
 		if err != nil {
 			fmt.Println("Unmarshal google protobuf has problems", err)
 			continue
@@ -82,24 +89,52 @@ func (*QueryWorker) execute(conn net.Conn, payloadSize uint32) {
 				break
 			}
 
+			mux.Lock()
 			// get prepared statement
 			if pkt.GetIsQuery() {
-				// prepared statement generation
-				originalSql := pkt.GetPayload() 
-				input := antlr.NewInputStream(originalSql)
-				sqlQuery, params := ExecSimpleSqlParser(input)
-				// print params
-				for _, p := range params {
-					fmt.Println(p)
-				}
-				fmt.Println(sqlQuery)
+				qw.insertMap(pkt)
+			} else {
+				// write to log
+				qw.logDown(pkt, fd)
 			}
-			
-			fmt.Println("size : ", size, " info : ", pkt.String())
+			mux.Unlock()
+
 			break
 		}
 	}
 }
+
+func (qw *QueryWorker) insertMap(pkt packet.PackPacket) {
+	key := pkt.GetSrcIp() + "-" + pkt.GetDestIp() + "-" + fmt.Sprint(pkt.GetSeq())
+	// prepared statement generation
+	originalSql := string(pkt.GetPayload()) 
+	input := antlr.NewInputStream(originalSql)
+	sqlQuery, params := ExecSimpleSqlParser(input)
+
+	pktInfo := PacketInfo{
+		timestamp: pkt.GetTimestamp(),
+		timestampInt: pkt.GetTimestampInt(),
+		query: sqlQuery,
+		params: params, 
+	}
+	qw.recordMapper[key] = pktInfo
+
+}
+
+func (qw *QueryWorker) logDown(pkt packet.PackPacket, fd *os.File) {
+	skey := pkt.GetDestIp() + "-" + pkt.GetSrcIp() + "-" + fmt.Sprint(pkt.GetAckSeq())
+	queryPkt, ok := qw.recordMapper[skey]
+	if ok {
+		timeDiff := pkt.GetTimestampInt() - queryPkt.timestampInt
+		logString := queryPkt.timestamp +
+					 " | " + pkt.GetDestIp() + " | " + pkt.GetSrcIp() +// reverse order because pkt is from the other side
+					 " | " + queryPkt.query + " | " + strings.Join(queryPkt.params[:], ",") +
+					 " | " + fmt.Sprint(timeDiff) + "ms"
+		fd.WriteString(logString+"\n")
+		delete(qw.recordMapper, skey)
+	}
+}
+
 //------ Protobuf workers stuffs ------
 
 //------ ANTLR4 parser stuffs ------
@@ -170,6 +205,13 @@ func ExecSimpleSqlParser(input antlr.CharStream) (sqlQuery string, params []stri
 // main code for Socket Server
 func main() {
 	listener := CreateSockert()
+	fd, err := os.Create(logFile)
+	if err != nil {
+		fmt.Println("Create log file err!")
+		os.Exit(1)
+	}
+
+	defer fd.Close()
 
 	for {
 		conn, err := listener.AcceptTCP()
@@ -181,7 +223,7 @@ func main() {
 			continue
 		}
 
-		go socketHandler(conn)
+		go socketHandler(conn, fd)
 	}
 
 	return
