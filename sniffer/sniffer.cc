@@ -264,8 +264,10 @@ int main(int argc, char **argv) {
 			// create output stream
 			google::protobuf::io::ArrayOutputStream aos(output_buf,siz);
 			CodedOutputStream *coded_output = new CodedOutputStream(&aos);
-			// wirte pkt size at first
-			coded_output->WriteVarint32(pkt.ByteSize());
+			// wirte pkt size at first 
+			// use WriteLittleEndian32 is much easier to deal with packet in Golang
+			// if in C++, with MSG_PEEK, we can deal with WriteVarInt
+			coded_output->WriteLittleEndian32(pkt.ByteSize());
 			// write pkt to coded_output
 			pkt.SerializeToCodedStream(coded_output);
 
