@@ -127,9 +127,9 @@ func (qw *QueryWorker) logDown(pkt packet.PackPacket, fd *os.File) {
 	if ok {
 		timeDiff := pkt.GetTimestampInt() - queryPkt.timestampInt
 		logString := queryPkt.timestamp +
-					 " | " + pkt.GetDestIp() + " | " + pkt.GetSrcIp() +// reverse order because pkt is from the other side
+					 " | " + pkt.GetDestIp() +  // reverse order because pkt is from the other side
 					 " | " + queryPkt.query + " | " + strings.Join(queryPkt.params[:], ",") +
-					 " | " + fmt.Sprint(timeDiff) + "ms"
+					 " | " + fmt.Sprint(timeDiff) + " (ms)"
 		fd.WriteString(logString+"\n")
 		delete(qw.recordMapper, skey)
 	}
